@@ -23,6 +23,8 @@ Demo on my [Twitter](https://twitter.com/willdphan/status/1652442555533885441?s=
     google_docs
     twilio_utils
     screen_capture
+    
+You will need credentials for `google_drive`, `google_docs`, `service_account`.
 
 ## Getting Started
 Install the required dependencies:
