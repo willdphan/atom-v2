@@ -39,9 +39,6 @@ Run the code by executing the command python `atom.py` in your terminal or IDE.
 6. Microsoft Azure's Computer Vision
 7. Create Drafts with Google Docs.
 
-Disclaimer
-Please note that the code provided here is only for educational purposes and may not work as expected when used in a production environment.
-
 ## License
 
 This script is open-source and licensed under the MIT License. For more details, check the [LICENSE](LICENSE) file.
