@@ -6,6 +6,9 @@ It uses various APIs and packages such as OpenAI, ElevenLabs, Google Calendar, a
 
 The code uses a microphone to receive audio inputs from users, transcribes them into text, and then generates audio responses for the user.
 
+Demo on my [Twitter](https://twitter.com/willdphan/status/1652442555533885441?s=20).
+
+
 ## Some Requirements
     Python 3.x
     openai
