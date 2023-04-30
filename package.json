@@ -27,6 +27,7 @@
     "react-markdown": "^8.0.4",
     "react-speech-kit": "^3.0.1",
     "react-speech-recognition": "^3.10.0",
+    "react-transition-group": "^4.4.5",
     "regenerator-runtime": "^0.13.11",
     "style-loader": "^3.3.2",
     "webpack": "^5.79.0",

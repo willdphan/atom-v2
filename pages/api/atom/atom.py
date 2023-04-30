@@ -1,41 +1,44 @@
-from datetime import timedelta
+from elevenlabslib import ElevenLabsUser
+import datetime
 import openai
 from elevenlabslib import *
-from pydub import AudioSegment
 from pydub.playback import play
-import io
-import config
-import time
-import speech_recognition as sr
-import simpleaudio as sa
 from search import search_google
-from twilio.rest import Client
 import os
 from langchain.agents import load_tools
 from langchain.agents import initialize_agent
 from langchain.llms import OpenAI
 from langchain.agents import load_tools
-from google_cal import create_event, delete_event, find_event, list_upcoming_events_today
-import pytz
+from google_cal import create_event, delete_event, find_event, get_events, parse_calendar_event_details, play_ask_event_title
+from gmail import announce_unread_emails, create_draft_email
 import re
-from dateutil.parser import parse
-
-
+import config as config
+import speech_recognition as sr
+from datetime import timedelta
+from pydub import AudioSegment
+from twilio_utils import send_sms
+from screen_capture import analyze_screen, analyze_screen_and_respond
+import os
+import io
+import simpleaudio as sa
+from google_docs import create_google_doc, play_ask_doc_title
 
 os.environ['OPENAI_API_KEY'] = config.OPENAI_API_KEY
 
-twilio_client = Client(config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN)
 openai.api_key = config.OPENAI_API_KEY
 api_key = config.ELEVEN_LABS_API_KEY
-from elevenlabslib import ElevenLabsUser
 user = ElevenLabsUser(api_key)
+
+messages = [
+    "You are an AI executive assistant named ATOM (can be pronounced as Adam). Provide responses less than 15 words."]
 
 # INTRO MESSAGE
 
+
 # def play_intro_message():
 #     voice = user.get_voices_by_name("Antoni")[0]
-#     audio = voice.generate_audio_bytes("Hello, I am ATOM, your AI executive assistant. How can I help you today?")
-
+#     audio = voice.generate_audio_bytes(
+#         "Hello, I'm ATOM, your AI executive assistant. How can I help you today?")
 #     audio = AudioSegment.from_file(io.BytesIO(audio), format="mp3")
 #     audio.export("intro.wav", format="wav")
 
@@ -43,46 +46,15 @@ user = ElevenLabsUser(api_key)
 #     play_obj = wave_obj.play()
 #     play_obj.wait_done()
 
+
 # play_intro_message()
 
-def play_ask_event_title():
-    voice = user.get_voices_by_name("Antoni")[0]
-    audio = voice.generate_audio_bytes("Please say the event title")
 
-    audio = AudioSegment.from_file(io.BytesIO(audio), format="mp3")
-    audio.export("intro.wav", format="wav")
-
-    wave_obj = sa.WaveObject.from_wave_file("intro.wav")
-    play_obj = wave_obj.play()
-    play_obj.wait_done()
-
-messages = ["You are an AI executive assistant named ATOM. Provide responses less than 15 words."]
-
-def send_sms(sms_text, recipient_phone_number):
-    print(f"Sending SMS to {recipient_phone_number} with content: {sms_text}")
-    message = twilio_client.messages.create(
-        body=sms_text,
-        from_=config.TWILIO_PHONE_NUMBER,
-        to=recipient_phone_number,
-    )
-    print(f"SMS sent to {recipient_phone_number}. Message SID: {message.sid}")
-
-def parse_calendar_event_details(user_message):
-    start_time, end_time = None, None
-    try:
-        start_time = parse(user_message, fuzzy=True)
-        start_time = pytz.timezone('America/New_York').localize(start_time)
-        end_time = start_time + timedelta(hours=1)
-    except ValueError as e:
-        print(f"Error parsing the date and time: {e}")
-
-    return start_time, end_time
-
-
-def transcribe(audio):
+def commands(audio):
     global messages
 
-    source_urls = []  # Initialize the variable at the beginning of the function
+    start_time = None
+    end_time = None
 
     audio_file = open(audio, "rb")
     print(f"Audio file size: {os.path.getsize(audio)} bytes")
@@ -94,26 +66,31 @@ def transcribe(audio):
     prompt = messages[-1]
     prompt += f"\nUser: {user_message}"
 
-    # START LISTENING
-
     if "stop listening" in user_message.lower():
-        return False  # Return False when the keyword is detected
+        return False
 
-
-    # CALENDAR
-    
     user_message_lower = user_message.lower()
 
-    if "create an event" in user_message_lower:
+    # SCREEN VIEW
+
+    if "what's on my screen" in user_message_lower:
+        system_message = analyze_screen_and_respond()
+
+    # CALENDAR COMMANDS
+
+    if any(phrase in user_message_lower for phrase in ["create an event", "schedule an event", "make time for"]):
         start_time, end_time = parse_calendar_event_details(user_message)
-        if start_time and end_time:
-            # Prompt the user to say the event title
-            system_message = "What would the event title be?"
-            print(system_message)
-            play_ask_event_title()
-        
-            recognizer = sr.Recognizer()
-            microphone = sr.Microphone()
+    if start_time and end_time:
+        # Prompt the user to say the event title
+        system_message = "Sure thing! What would the event title be?"
+        with open("pages/api/transcript.txt", "w") as f:
+            # Save the current message before playing the audio
+            f.write(system_message)
+        print(system_message)
+        play_ask_event_title()
+
+        recognizer = sr.Recognizer()
+        microphone = sr.Microphone()
 
         with microphone as source:
             recognizer.adjust_for_ambient_noise(source)
@@ -124,14 +101,18 @@ def transcribe(audio):
             event_title = recognizer.recognize_google(audio)
             create_event(start_time, end_time, event_title, attendees=None)
             system_message = f"Event created: {event_title} on {start_time}"
+
+            # Send SMS
+            recipient_phone_number = config.RECIPIENT_PHONE_NUMBER
+            sms_text = f"New calendar event: '{event_title}' on {start_time.strftime('%Y-%m-%d %I:%M %p')}"
+            send_sms(sms_text, recipient_phone_number)
+
         except sr.UnknownValueError:
             system_message = "I'm sorry, I could not understand your response."
         except sr.RequestError:
             system_message = "Sorry, there was an error with the speech recognition service. Please try again later."
-    else:
-        system_message = "Failed to create event. Please try again with a valid date and time."
 
-    if "delete the event" in user_message_lower:
+    if any(phrase in user_message_lower for phrase in ["delete the event", "remove the event", "cancel the event"]):
         start_time, _ = parse_calendar_event_details(user_message)
         if start_time:
             event_to_delete = find_event(start_time)
@@ -139,25 +120,42 @@ def transcribe(audio):
                 delete_event(event_to_delete['id'])
                 system_message = "Sure thing, event deleted!"
             else:
-                    system_message = "Failed to delete event. Event not found."
+                system_message = "Failed to delete event. Event not found."
         else:
-                system_message = "Failed to delete event. Please try again with a valid date and time."
+            system_message = "Failed to delete event. Please try again with a valid date and time."
 
+    if any(phrase in user_message_lower for phrase in ["list upcoming events today", "list today's events", "list events today", "list upcoming events"]):
+        events = get_events()
+        today = datetime.datetime.now().date()
+        todays_events = [
+            event for event in events if event['start_time'].date() == today]
+        if todays_events:
+            system_message = "Looks like you got:\n"
+            for event in todays_events:
+                start = event['start_time'].strftime("%I:%M %p")
+                end = event['end_time'].strftime("%I:%M %p")
+                summary = event['summary']
+                system_message += f"{start} - {end}: {summary}\n"
+            # Send SMS
+            recipient_phone_number = config.RECIPIENT_PHONE_NUMBER
+            sms_text = system_message
+            send_sms(sms_text, recipient_phone_number)
+            # system_message = "Here are your upcoming events for today. Check your texts for the details!"
+        else:
+            system_message = "All clear! No upcoming events for today."
 
     # START SEARCHING
 
-    if "search for" in user_message.lower():
-        search_query = re.sub(r'hey (adam|atom),?', '', transcript, flags=re.IGNORECASE).strip()
-        search_query = search_query.replace("search for", "").strip()
+    if any(phrase in user_message_lower for phrase in ["search for", "look up"]):
+        search_query = transcript.replace("search for", "").replace(
+            "hey adam,", "").replace("hey atom,", "").replace("provide the sources", "").strip()
         recipient_phone_number = config.RECIPIENT_PHONE_NUMBER
         search_results = search_google(search_query)
-        source_urls = [result["link"] for result in search_results["items"]]
-        snippets = [result["snippet"] for result in search_results["items"]]
-    # enable below when twilio is working
-    #     # sms_text = "Here are the source URLs for your search:\n" + "\n".join(str(url) for url in source_urls)
-    #     # send_sms(sms_text, recipient_phone_number)
+        print("Search results:", search_results)
 
-        gpt_search_prompt = f"Find the answer to the question '{search_query}' using the following search results snippets: \n\n" + "\n\n".join(snippets)
+        snippets = [result["snippet"] for result in search_results["items"]]
+        gpt_search_prompt = f"Find a concise answer to the question '{search_query}' using the following search results snippets: \n\n" + "\n\n".join(
+            snippets)
 
         search_response = openai.Completion.create(
             engine="text-davinci-003",
@@ -167,15 +165,81 @@ def transcribe(audio):
             stop=None,
             temperature=0.5,
         )
+        print("GPT response:", search_response)
 
         answer = search_response["choices"][0]["text"].strip()
 
-        if not source_urls:
-            system_message = f"Sorry, I could not find any results for '{search_query}'"
-        else:
-            system_message = f"{answer} Check your texts for the sources!"
+        if "provide the sources" in user_message_lower:
+            source_list = []
+            for result in search_results["items"]:
+                source = f"{result['title']} - {result['link']}"
+                source_list.append(source)
 
-    messages.append(f"ATOM: {system_message}")
+            if not source_list:
+                system_message = f"Sorry, I could not find any results for '{search_query}'"
+            else:
+                formatted_sources = "\n\n".join(source_list)
+                sms_text = f"Here are the source URLs for your search:\n\n{formatted_sources}"
+                system_message = f"{answer} Check your texts for the sources!"
+                send_sms(sms_text, recipient_phone_number)
+                print("SMS sent.")
+
+        else:
+            system_message = f"{answer}."
+
+        messages.append(f"ATOM: {system_message}")
+
+    # CREATE DRAFTS IN GOOGLE DOCS
+
+    if "create a draft" in user_message_lower:
+        draft_query = transcript.replace("create a draft", "").replace(
+            "hey adam,", "").replace("hey atom,", "").strip()
+
+        system_message = "Okay, what would the draft title be?"
+        with open("pages/api/transcript.txt", "w") as f:
+            # Save the current message before playing the audio
+            f.write(system_message)
+        play_ask_doc_title()
+        print(system_message)
+
+        recognizer = sr.Recognizer()
+        microphone = sr.Microphone()
+
+        with microphone as source:
+            recognizer.adjust_for_ambient_noise(source)
+            audio = recognizer.listen(source)
+
+        try:
+            title = recognizer.recognize_google(audio)
+
+            # Generate the initial text using GPT
+            draft_prompt = f"Write an initial draft text about '{draft_query}' and for the document titled '{title}':"
+            draft_response = openai.Completion.create(
+                engine="text-davinci-003",
+                prompt=draft_prompt,
+                max_tokens=150,
+                n=1,
+                stop=None,
+                temperature=0.5,
+            )
+            initial_text = draft_response["choices"][0]["text"].strip()
+
+            document_id = create_google_doc(title, initial_text)
+
+            # SEND SMS
+            if document_id:
+                system_message = f"Created a new Google Doc with title '{title}'."
+                # Send the document link via SMS
+                doc_link = f"https://docs.google.com/document/d/{document_id}"
+                sms_text = f"Here's the link to the newly created Google Doc: {doc_link}"
+                recipient_phone_number = config.RECIPIENT_PHONE_NUMBER
+                send_sms(sms_text, recipient_phone_number)
+            else:
+                system_message = "Failed to create a new Google Doc. Please try again later."
+        except sr.UnknownValueError:
+            system_message = "I'm sorry, I could not understand your response."
+        except sr.RequestError:
+            system_message = "Sorry, there was an error with the speech recognition service. Please try again later."
 
     # Generate and play audio (moved outside the else block)
     voice = user.get_voices_by_name("Antoni")[0]
@@ -185,7 +249,8 @@ def transcribe(audio):
     audio.export("output.wav", format="wav")
 
     with open("pages/api/transcript.txt", "w") as f:
-        f.write(system_message)  # Save the current message before playing the audio
+        # Save the current message before playing the audio
+        f.write(system_message)
 
     wave_obj = sa.WaveObject.from_wave_file("output.wav")
     play_obj = wave_obj.play()
@@ -195,6 +260,52 @@ def transcribe(audio):
     print(f"Transcript: {chat_transcript}")
 
     return True  # Return True by default, indicating the script should
+
+
+def transcribe(audio):
+    global messages
+
+    audio_file = open(audio, "rb")
+    transcript = openai.Audio.transcribe("whisper-1", audio_file)
+
+    prompt = messages[-1]
+    prompt += f"\nUser: {transcript['text']}"
+
+    response = openai.Completion.create(
+        engine="text-davinci-003",
+        prompt=prompt,
+        max_tokens=80,
+        n=1,
+        stop=None,
+        temperature=0.5,
+    )
+
+    if "stop listening" in transcript['text'].lower():
+        return False  # Return False when the keyword is detected
+
+    system_message = response["choices"][0]["text"]
+    system_message = system_message.replace(
+        "Alice:", "").replace("ATOM:", "").strip()
+    messages.append(f"{system_message}")
+
+    voice = user.get_voices_by_name("Antoni")[0]
+    audio = voice.generate_audio_bytes(system_message)
+
+    audio = AudioSegment.from_file(io.BytesIO(audio), format="mp3")
+    audio.export("output.wav", format="wav")
+
+    with open("pages/api/transcript.txt", "w") as f:
+        # Save the current message before playing the audio
+        f.write(system_message)
+
+    wave_obj = sa.WaveObject.from_wave_file("output.wav")
+    play_obj = wave_obj.play()
+    play_obj.wait_done()
+
+    chat_transcript = "\n".join(messages)
+    print(f"Transcript: {chat_transcript}")
+
+    return True  # Return True by default, indicating the script should continue running
 
 
 def listen_and_respond():
@@ -230,14 +341,23 @@ def listen_and_respond():
                 if is_listening:
                     with open("audio.wav", "wb") as f:
                         print("Generating audio response...")
-                        f.write(audio.get_wav_data())  # Correct indentation here
+                        # Correct indentation here
+                        f.write(audio.get_wav_data())
                         print()
 
                     is_playing_response = True
-                    should_continue = transcribe("audio.wav")
+
+                    if "what's on my screen" in transcript:
+                        should_continue = analyze_screen_and_respond()
+                    elif any(command in transcript for command in ["look at my screen", "create an event", "make time for", "schedule an event", "delete the event", "remove the event", "get rid of the event", "search for", "list upcoming events today", "list today's events", "list upcoming events", "list events today", "be quiet", "look up", "create a draft"]):
+                        should_continue = commands("audio.wav")
+                    else:
+                        should_continue = transcribe("audio.wav")
+
                     is_playing_response = False
 
                     if not should_continue:
                         is_listening = False
+
 
 listen_and_respond()

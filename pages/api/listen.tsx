@@ -69,4 +69,4 @@ export const config = {
   },
 };
 
-runScript("pages/api/atom.py");
+runScript("pages/api/atom/atom.py");

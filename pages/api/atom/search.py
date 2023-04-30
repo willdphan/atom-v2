@@ -2,7 +2,7 @@ import os
 import openai
 import requests
 import json
-import config
+import config as config
 
 # Replace with your Google API key and Google CSE ID
 GOOGLE_API_KEY = config.GOOGLE_API_KEY
@@ -16,7 +16,6 @@ def search_google(query):
     results = response.json()
     print("Search results JSON:", results)  # Add this line
     return results
-
 
 def gpt3_query(prompt):
     response = openai.Completion.create(
